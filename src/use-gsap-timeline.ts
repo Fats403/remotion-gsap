@@ -82,7 +82,24 @@ const assertNoCallbacks = (value: unknown) => {
   }
 };
 
-const guardTimelineMethods = (timeline: gsap.core.Timeline) => {
+type TimelineControls = {
+  isPaused: () => boolean;
+  pause: () => void;
+  renderAt: (seconds: number) => void;
+  restoreForContextRevert: () => void;
+  kill: () => void;
+};
+
+const guardTimelineMethods = (
+  timeline: gsap.core.Timeline,
+): TimelineControls => {
+  // Bind the package-owned controls before replacing the public methods the
+  // builder receives. Internal frame seeking and cleanup must remain possible
+  // without giving user code a second clock.
+  const originalPaused = timeline.paused.bind(timeline);
+  const originalTotalTime = timeline.totalTime.bind(timeline);
+  const originalKill = timeline.kill.bind(timeline);
+
   const playbackError = () => {
     throw new Error(
       'useGsapTimeline builders must not start playback. Remove play(), resume(), restart(), reverse(), or paused(false).',
@@ -93,14 +110,42 @@ const guardTimelineMethods = (timeline: gsap.core.Timeline) => {
   timeline.resume = playbackError as typeof timeline.resume;
   timeline.restart = playbackError as typeof timeline.restart;
   timeline.reverse = playbackError as typeof timeline.reverse;
+  timeline.pause = (() => {
+    throw new Error(
+      'useGsapTimeline owns timeline pause state. Do not call timeline.pause() inside the builder.',
+    );
+  }) as typeof timeline.pause;
 
-  const originalPaused = timeline.paused.bind(timeline);
   timeline.paused = ((value?: boolean) => {
     if (value === false) {
       return playbackError();
     }
-    return value === undefined ? originalPaused() : originalPaused(value);
+    if (value !== undefined) {
+      throw new Error(
+        'useGsapTimeline owns timeline pause state. Read timeline.paused() if needed, but do not set it.',
+      );
+    }
+    return originalPaused();
   }) as typeof timeline.paused;
+
+  const seekingError = () => {
+    throw new Error(
+      'useGsapTimeline owns timeline seeking. Remove seek(), time(), totalTime(), progress(), totalProgress(), tweenTo(), or tweenFromTo() from the builder.',
+    );
+  };
+
+  timeline.seek = seekingError as typeof timeline.seek;
+  timeline.time = seekingError as typeof timeline.time;
+  timeline.totalTime = seekingError as typeof timeline.totalTime;
+  timeline.progress = seekingError as typeof timeline.progress;
+  timeline.totalProgress = seekingError as typeof timeline.totalProgress;
+  timeline.tweenTo = seekingError as typeof timeline.tweenTo;
+  timeline.tweenFromTo = seekingError as typeof timeline.tweenFromTo;
+  timeline.kill = (() => {
+    throw new Error(
+      'useGsapTimeline owns timeline cleanup. Do not call timeline.kill() inside the builder.',
+    );
+  }) as typeof timeline.kill;
 
   const originalEventCallback = timeline.eventCallback.bind(timeline) as (
     ...args: unknown[]
@@ -154,10 +199,51 @@ const guardTimelineMethods = (timeline: gsap.core.Timeline) => {
   timeline.call = (() => {
     throw new Error('useGsapTimeline does not allow timeline.call().');
   }) as typeof timeline.call;
-};
 
-const renderTimelineAt = (timeline: gsap.core.Timeline, seconds: number) => {
-  timeline.totalTime(seconds, true);
+  return {
+    isPaused: () => originalPaused(),
+    pause: () => {
+      originalPaused(true);
+    },
+    renderAt: (seconds) => {
+      originalTotalTime(seconds, true);
+    },
+    restoreForContextRevert: () => {
+      // gsap.context().revert() calls animation.kill(), which in turn reaches
+      // public progress/time methods. Remove every instance-level guard only
+      // after builder execution is permanently over so GSAP teardown can use
+      // its untouched prototype implementation.
+      for (const method of [
+        "play",
+        "resume",
+        "restart",
+        "reverse",
+        "pause",
+        "paused",
+        "seek",
+        "time",
+        "totalTime",
+        "progress",
+        "totalProgress",
+        "tweenTo",
+        "tweenFromTo",
+        "kill",
+        "eventCallback",
+        "then",
+        "to",
+        "from",
+        "fromTo",
+        "set",
+        "add",
+        "call",
+      ]) {
+        delete (timeline as unknown as Record<string, unknown>)[method];
+      }
+    },
+    kill: () => {
+      originalKill();
+    },
+  };
 };
 
 /**
@@ -171,7 +257,7 @@ export const useGsapTimeline = <T extends Element>(
   const frame = useCurrentFrame();
   const {fps} = useVideoConfig();
   const scopeRef = useRef<T>(null);
-  const timelineRef = useRef<gsap.core.Timeline | null>(null);
+  const controlsRef = useRef<TimelineControls | null>(null);
   const buildRef = useRef(build);
   const frameRef = useRef(frame);
   const fpsRef = useRef(fps);
@@ -186,18 +272,21 @@ export const useGsapTimeline = <T extends Element>(
       return;
     }
 
-    const state: {timeline: gsap.core.Timeline | null} = {timeline: null};
+    const state: {
+      timeline: gsap.core.Timeline | null;
+      controls: TimelineControls | null;
+    } = {timeline: null, controls: null};
     const context = gsap.context(() => undefined, scope);
 
     try {
       context.add(() => {
         state.timeline = gsap.timeline({paused: true});
-        guardTimelineMethods(state.timeline);
+        state.controls = guardTimelineMethods(state.timeline);
         const selector = gsap.utils.selector(scope);
 
         const result = buildRef.current({timeline: state.timeline, scope, selector});
 
-        if (!state.timeline.paused()) {
+        if (!state.controls.isPaused()) {
           throw new Error(
             'useGsapTimeline builders must not start playback. Remove play(), resume(), restart(), or reverse().',
           );
@@ -223,30 +312,34 @@ export const useGsapTimeline = <T extends Element>(
         }
 
         // Builders only describe motion. Reassert package ownership of playback.
-        state.timeline.pause();
-        renderTimelineAt(state.timeline, frameToSeconds(frameRef.current, fpsRef.current));
+        state.controls.pause();
+        state.controls.renderAt(
+          frameToSeconds(frameRef.current, fpsRef.current),
+        );
       });
 
-      timelineRef.current = state.timeline;
+      controlsRef.current = state.controls;
     } catch (error) {
+      state.controls?.restoreForContextRevert();
       context.revert();
-      state.timeline?.kill();
+      state.controls?.kill();
       throw error;
     }
 
     return () => {
-      timelineRef.current = null;
+      controlsRef.current = null;
+      state.controls?.restoreForContextRevert();
       context.revert();
-      state.timeline?.kill();
+      state.controls?.kill();
     };
     // The explicit dependency list is the same contract as useEffect dependencies.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, dependencies);
 
   useLayoutEffect(() => {
-    const timeline = timelineRef.current;
-    if (timeline) {
-      renderTimelineAt(timeline, frameToSeconds(frame, fps));
+    const controls = controlsRef.current;
+    if (controls) {
+      controls.renderAt(frameToSeconds(frame, fps));
     }
   }, [fps, frame]);
 

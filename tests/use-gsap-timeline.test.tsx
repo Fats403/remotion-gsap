@@ -216,6 +216,29 @@ describe('useGsapTimeline', () => {
     );
   });
 
+  it.each([
+    ['seek', (clock: gsap.core.Timeline) => clock.seek(1)],
+    ['totalTime', (clock: gsap.core.Timeline) => clock.totalTime(1)],
+    ['progress', (clock: gsap.core.Timeline) => clock.progress(0.5)],
+    ['tweenTo', (clock: gsap.core.Timeline) => clock.tweenTo(1)],
+    ['pause', (clock: gsap.core.Timeline) => clock.pause()],
+    ['kill', (clock: gsap.core.Timeline) => clock.kill()],
+  ] as const)(
+    'rejects manual %s even when the timeline is aliased',
+    async (_method, invoke) => {
+      const UnsafeHarness = () => {
+        const scope = useGsapTimeline<HTMLDivElement>(({timeline: clock}) => {
+          invoke(clock);
+        });
+        return <div ref={scope} />;
+      };
+
+      await expect(setFrame(0, <UnsafeHarness />)).rejects.toThrow(
+        /useGsapTimeline owns timeline/,
+      );
+    },
+  );
+
   it('rejects asynchronous builders', async () => {
     const AsyncHarness = () => {
       const scope = useGsapTimeline<HTMLDivElement>(async () => undefined);

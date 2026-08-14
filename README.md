@@ -56,7 +56,7 @@ export const Scene = () => {
 };
 ```
 
-The hook creates one scoped, paused GSAP timeline. On each Remotion frame, it seeks the timeline to `frame / fps`.
+The hook creates one scoped, paused GSAP timeline. On each Remotion frame, it seeks the timeline to `frame / fps`. Playback, manual seeking (`seek`, `time`, `totalTime`, `progress`, `tweenTo`, and related methods), pause-state mutation, and cleanup are package-owned and rejected inside builders.
 
 Use GSAP labels, position parameters, staggers, keyframes, repeats, yoyo, CSS transforms, SVG attributes, and nested timelines as usual.
 
