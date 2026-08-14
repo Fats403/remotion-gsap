@@ -98,7 +98,7 @@ npx skills add Fats403/remotion-gsap
 ## Tested behavior
 
 - Direct, sequential, backward, and repeated frame access
-- Renderer concurrency 1 and 8
+- Serial and concurrent renderer execution
 - React 18 and 19
 - Nested and overlapping Remotion sequences
 - HTML and SVG scope roots

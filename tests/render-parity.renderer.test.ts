@@ -1,5 +1,6 @@
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {availableParallelism} from 'node:os';
 import {bundle} from '@remotion/bundler';
 import {
   openBrowser,
@@ -26,6 +27,7 @@ import {
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const entryPoint = path.join(rootDir, 'tests/fixtures/index.ts');
 const shuffledFrames = [105, 0, 195, 45, 150, 15, 75];
+const rendererConcurrency = Math.min(8, availableParallelism());
 
 const pixelDifference = (leftBuffer: Buffer, rightBuffer: Buffer) => {
   const left = PNG.sync.read(leftBuffer);
@@ -94,7 +96,7 @@ describe('Remotion renderer parity', () => {
       imageFormat: 'png',
       frameRange: [0, composition.durationInFrames - 1],
       everyNthFrame: 15,
-      concurrency: 4,
+      concurrency: Math.min(4, rendererConcurrency),
       puppeteerInstance: browser,
       onStart: () => undefined,
       onFrameUpdate: () => undefined,
@@ -232,10 +234,10 @@ describe('Remotion renderer parity', () => {
     expect(pixelAt(frames[2]!.buffer!, 50, 50)).toEqual([255, 0, 0, 255]);
   });
 
-  it('matches every complex-surface frame at concurrency 1 and 8', async () => {
+  it('matches every complex-surface frame between serial and concurrent rendering', async () => {
     const surface = await selectComposition({serveUrl, id: SURFACE_FIXTURE_ID});
     const serial = await renderFrameMap(surface, 1);
-    const concurrent = await renderFrameMap(surface, 8);
+    const concurrent = await renderFrameMap(surface, rendererConcurrency);
 
     expect(serial.size).toBe(surface.durationInFrames);
     expect(concurrent.size).toBe(surface.durationInFrames);
@@ -250,7 +252,7 @@ describe('Remotion renderer parity', () => {
 
   it('keeps overlapping scoped Sequences deterministic under shuffled access', async () => {
     const overlap = await selectComposition({serveUrl, id: OVERLAP_FIXTURE_ID});
-    const rendered = await renderFrameMap(overlap, 8);
+    const rendered = await renderFrameMap(overlap, rendererConcurrency);
 
     for (const frame of [84, 30, 9, 64, 10, 45, 29]) {
       const direct = await renderStill({
