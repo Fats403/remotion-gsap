@@ -1,0 +1,75 @@
+{
+  "name": "remotion-gsap",
+  "version": "0.0.1",
+  "description": "Deterministic, frame-driven GSAP timelines for Remotion",
+  "keywords": ["remotion", "gsap", "animation", "video", "react"],
+  "license": "MIT",
+  "author": "Brayden Blackwell",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    }
+  },
+  "files": ["dist", "SKILL.md"],
+  "sideEffects": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Fats403/remotion-gsap.git"
+  },
+  "bugs": {"url": "https://github.com/Fats403/remotion-gsap/issues"},
+  "homepage": "https://github.com/Fats403/remotion-gsap#readme",
+  "engines": {"node": ">=20"},
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --config vitest.config.ts",
+    "test:watch": "vitest --config vitest.config.ts",
+    "test:renderer": "vitest run --config vitest.renderer.config.ts",
+    "test:consumer": "tsx scripts/test-packed-consumer.ts",
+    "test:compat:react18": "tsx scripts/test-react-18-consumer.ts",
+    "test:all": "pnpm typecheck && pnpm test && pnpm build && pnpm test:consumer && pnpm test:renderer",
+    "pack:check": "pnpm pack --dry-run",
+    "prepack": "pnpm build",
+    "prepublishOnly": "pnpm test:all && pnpm test:compat:react18"
+  },
+  "peerDependencies": {
+    "gsap": ">=3.12.0 <4",
+    "react": ">=18.0.0 <20",
+    "remotion": ">=4.0.0 <5"
+  },
+  "devDependencies": {
+    "@remotion/bundler": "4.0.501",
+    "@remotion/cli": "4.0.501",
+    "@remotion/renderer": "4.0.501",
+    "@types/node": "^22.15.0",
+    "@types/pngjs": "^6.0.5",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "gsap": "3.15.0",
+    "jsdom": "^26.1.0",
+    "pixelmatch": "^7.1.0",
+    "pngjs": "^7.0.0",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "remotion": "4.0.501",
+    "tsup": "^8.5.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.4"
+  },
+  "packageManager": "pnpm@10.28.0",
+  "publishConfig": {
+    "access": "public"
+  }
+}
