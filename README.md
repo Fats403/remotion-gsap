@@ -2,6 +2,8 @@
 
 Deterministic GSAP timelines for Remotion.
 
+![Kinetic type choreographed with one GSAP timeline](https://raw.githubusercontent.com/Fats403/remotion-gsap/main/assets/kinetic.gif)
+
 ## The problem
 
 Remotion makes frame-based animation predictable. Complex choreography can still become difficult to maintain once a scene has overlapping entrances, labels, staggers, transforms, and transitions.
@@ -9,6 +11,12 @@ Remotion makes frame-based animation predictable. Complex choreography can still
 GSAP has a strong timeline API for that work. `remotion-gsap` connects it to Remotion without giving up deterministic rendering.
 
 Remotion remains the clock. GSAP describes the motion.
+
+## Why not just play() the timeline?
+
+GSAP normally advances on its own requestAnimationFrame ticker. That looks right in Studio preview and breaks in `renderMedia()`, where frames are captured headlessly, concurrently, and out of order. A ticker-driven timeline produces different pixels on different runs.
+
+This hook never lets the ticker run. It seeks a paused timeline, so every frame is a pure function of the frame number, no matter what order frames render in or how many render at once.
 
 ## Install
 
@@ -59,6 +67,18 @@ export const Scene = () => {
 The hook creates one scoped, paused GSAP timeline. On each Remotion frame, it seeks the timeline to `frame / fps`. Playback, manual seeking (`seek`, `time`, `totalTime`, `progress`, `tweenTo`, and related methods), pause-state mutation, and cleanup are package-owned and rejected inside builders.
 
 Use GSAP labels, position parameters, staggers, keyframes, repeats, yoyo, CSS transforms, SVG attributes, and nested timelines as usual.
+
+## Demos
+
+Each of these is one `useGsapTimeline` builder, rendered with the standard Remotion renderer.
+
+![Dashboard choreography](https://raw.githubusercontent.com/Fats403/remotion-gsap/main/assets/dashboard.gif)
+
+Staggered card entrances and SVG chart draw-ins, sequenced with labels and position parameters.
+
+![Scene transition](https://raw.githubusercontent.com/Fats403/remotion-gsap/main/assets/transition.gif)
+
+Scene-to-scene clip-path wipes and staggered reveals, with repeat and yoyo accents.
 
 ## Dynamic values
 
