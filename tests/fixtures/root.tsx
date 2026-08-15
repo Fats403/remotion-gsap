@@ -3,6 +3,7 @@ import {
   FpsFixture,
   NestedSequenceFixture,
   OverlapFixture,
+  SamePropertyOverlapFixture,
   SequenceFixture,
   SurfaceFixture,
   SvgRootFixture,
@@ -17,6 +18,7 @@ export const SEQUENCE_FIXTURE_ID = 'SequenceFixture';
 export const NESTED_SEQUENCE_FIXTURE_ID = 'NestedSequenceFixture';
 export const SURFACE_FIXTURE_ID = 'SurfaceFixture';
 export const OVERLAP_FIXTURE_ID = 'OverlapFixture';
+export const SAME_PROPERTY_OVERLAP_FIXTURE_ID = 'SamePropertyOverlapFixture';
 export const SVG_ROOT_FIXTURE_ID = 'SvgRootFixture';
 
 export const TestRoot = () => (
@@ -92,6 +94,14 @@ export const TestRoot = () => (
       fps={30}
       width={100}
       height={100}
+    />
+    <Composition
+      id={SAME_PROPERTY_OVERLAP_FIXTURE_ID}
+      component={SamePropertyOverlapFixture}
+      durationInFrames={60}
+      fps={30}
+      width={320}
+      height={120}
     />
   </>
 );

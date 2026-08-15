@@ -18,6 +18,7 @@ import {
   FPS_60_FIXTURE_ID,
   NESTED_SEQUENCE_FIXTURE_ID,
   OVERLAP_FIXTURE_ID,
+  SAME_PROPERTY_OVERLAP_FIXTURE_ID,
   SEQUENCE_FIXTURE_ID,
   SHOWCASE_ID,
   SURFACE_FIXTURE_ID,
@@ -266,6 +267,36 @@ describe('Remotion renderer parity', () => {
       });
 
       expect(pixelDifference(rendered.get(frame)!, direct.buffer!)).toBe(0);
+    }
+  });
+
+  it('keeps overlapping same-property tweens identical across stills, serial and concurrent renders', async () => {
+    const contested = await selectComposition({
+      serveUrl,
+      id: SAME_PROPERTY_OVERLAP_FIXTURE_ID,
+    });
+    const serial = await renderFrameMap(contested, 1);
+    const concurrent = await renderFrameMap(contested, rendererConcurrency);
+
+    for (const frame of [23, 16, 44, 0, 59]) {
+      const direct = await renderStill({
+        serveUrl,
+        composition: contested,
+        frame,
+        output: null,
+        puppeteerInstance: browser,
+        imageFormat: 'png',
+        logLevel: 'warn',
+      });
+
+      expect(
+        pixelDifference(serial.get(frame)!, direct.buffer!),
+        `contested frame ${frame} still vs serial`,
+      ).toBe(0);
+      expect(
+        pixelDifference(serial.get(frame)!, concurrent.get(frame)!),
+        `contested frame ${frame} serial vs concurrent`,
+      ).toBe(0);
     }
   });
 

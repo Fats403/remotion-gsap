@@ -73,6 +73,110 @@ const findTimelineCallbacks = (timeline: gsap.core.Timeline): string[] => {
   return [...new Set(animations.flatMap((animation) => findCallbacksInValue(animationVars(animation))))];
 };
 
+// nodeType instead of instanceof keeps the check correct across realms
+// (renderer processes, jsdom, iframes) where Element identity differs.
+const isElementTarget = (target: unknown): boolean =>
+  typeof target === 'object' &&
+  target !== null &&
+  (target as {nodeType?: unknown}).nodeType === 1;
+
+const describeTarget = (target: unknown): string => {
+  if (target === null) {
+    return 'null';
+  }
+  if (typeof target !== 'object') {
+    return typeof target;
+  }
+  // GSAP stamps internal bookkeeping onto tween targets; hide it so the
+  // error names the author's own properties.
+  const keys = Object.keys(target as object).filter((key) => key !== '_gsap');
+  const preview = keys.slice(0, 3).join(', ');
+  return `plain object {${preview}${keys.length > 3 ? ', …' : ''}}`;
+};
+
+const findNonElementTargets = (timeline: gsap.core.Timeline): string[] => {
+  const found: string[] = [];
+  for (const animation of getTimelineAnimations(timeline)) {
+    const targets = (animation as {targets?: () => unknown[]}).targets?.();
+    if (!targets) {
+      continue;
+    }
+    for (const target of targets) {
+      if (!isElementTarget(target)) {
+        found.push(describeTarget(target));
+      }
+    }
+  }
+  return [...new Set(found)];
+};
+
+// GSAP resolves "random(...)" strings with unseeded Math.random at tween
+// initialization, so every mount — and every Lambda render chunk — rolls
+// different values. Same for random-order staggers. repeatRefresh re-rolls
+// on every repeat cycle, which also re-records lazily on frame revisits.
+const findNondeterministicVars = (value: unknown, seen = new Set<object>()): string[] => {
+  if (typeof value === 'string') {
+    return value.includes('random(') ? [`"${value}"`] : [];
+  }
+  if (typeof value !== 'object' || value === null || seen.has(value)) {
+    return [];
+  }
+  seen.add(value);
+  const found: string[] = [];
+  const record = value as Record<string, unknown>;
+  if (!Array.isArray(value)) {
+    if (record.repeatRefresh === true) {
+      found.push('repeatRefresh: true');
+    }
+    const stagger = record.stagger;
+    if (
+      typeof stagger === 'object' &&
+      stagger !== null &&
+      (stagger as {from?: unknown}).from === 'random'
+    ) {
+      found.push("stagger: {from: 'random'}");
+    }
+  }
+  for (const nested of Array.isArray(value) ? value : Object.values(record)) {
+    found.push(...findNondeterministicVars(nested, seen));
+  }
+  return [...new Set(found)];
+};
+
+const findTimelineNondeterminism = (timeline: gsap.core.Timeline): string[] => {
+  const animations = getTimelineAnimations(timeline);
+  return [
+    ...new Set(animations.flatMap((animation) => findNondeterministicVars(animationVars(animation)))),
+  ];
+};
+
+// Animations created inside the builder but never parented under the package
+// timeline live on gsap.globalTimeline and advance on the wall clock — a
+// second, nondeterministic frame source the timeline walk cannot see. Static
+// zero-duration, callback-free, delay-free tweens (the gsap.set pattern) are
+// deterministic at build time and stay allowed.
+const findStrayAnimations = (
+  timeline: gsap.core.Timeline,
+  preexisting: Set<gsap.core.Animation>,
+): string[] => {
+  const owned = new Set(getTimelineAnimations(timeline));
+  const problems: string[] = [];
+  for (const animation of gsap.globalTimeline.getChildren(true, true, true)) {
+    if (owned.has(animation) || preexisting.has(animation)) {
+      continue;
+    }
+    const vars = animationVars(animation);
+    const callbacks = findCallbacksInValue(vars);
+    const delay = typeof vars.delay === 'number' ? vars.delay : 0;
+    if (callbacks.length > 0) {
+      problems.push(`a wall-clock animation with callbacks (${callbacks.join(', ')})`);
+    } else if (animation.totalDuration() > 0 || delay > 0) {
+      problems.push('a wall-clock animation that is not attached to the provided timeline');
+    }
+  }
+  return problems;
+};
+
 const assertNoCallbacks = (value: unknown) => {
   const callbacks = findCallbacksInValue(value);
   if (callbacks.length > 0) {
@@ -206,6 +310,12 @@ const guardTimelineMethods = (
       originalPaused(true);
     },
     renderAt: (seconds) => {
+      // Always render forward from zero. GSAP renders timeline children in
+      // reverse order on backward passes, so overlapping same-property
+      // tweens resolve differently when a frame is approached from above
+      // vs below. Two forward passes make every visit — direct still,
+      // sequential chunk, backward scrub — identical to forward playback.
+      originalTotalTime(0, true);
       originalTotalTime(seconds, true);
     },
     restoreForContextRevert: () => {
@@ -284,7 +394,22 @@ export const useGsapTimeline = <T extends Element>(
         state.controls = guardTimelineMethods(state.timeline);
         const selector = gsap.utils.selector(scope);
 
-        const result = buildRef.current({timeline: state.timeline, scope, selector});
+        const preexisting = new Set<gsap.core.Animation>(
+          gsap.globalTimeline.getChildren(true, true, true),
+        );
+        const originalTickerAdd = gsap.ticker.add.bind(gsap.ticker);
+        gsap.ticker.add = (() => {
+          throw new Error(
+            'useGsapTimeline builders must not register gsap.ticker callbacks. The Remotion frame is the only clock.',
+          );
+        }) as typeof gsap.ticker.add;
+
+        let result: unknown;
+        try {
+          result = buildRef.current({timeline: state.timeline, scope, selector});
+        } finally {
+          gsap.ticker.add = originalTickerAdd;
+        }
 
         if (!state.controls.isPaused()) {
           throw new Error(
@@ -311,11 +436,72 @@ export const useGsapTimeline = <T extends Element>(
           );
         }
 
+        const nonElementTargets = findNonElementTargets(state.timeline);
+        if (nonElementTargets.length > 0) {
+          throw new Error(
+            `useGsapTimeline tweens must target DOM or SVG elements, but found: ${nonElementTargets.join(
+              '; ',
+            )}. Tweening plain objects animates in the Player but freezes in stills and renders, because nothing re-reads the object after a frame seek. Animate elements through the scoped selector or refs, or derive numeric values with Remotion's useCurrentFrame() and interpolate().`,
+          );
+        }
+
+        const nondeterminism = findTimelineNondeterminism(state.timeline);
+        if (nondeterminism.length > 0) {
+          throw new Error(
+            `useGsapTimeline rejects nondeterministic tween configuration (${nondeterminism.join(
+              '; ',
+            )}). GSAP resolves these with unseeded Math.random, so every mount and every render process disagrees. Derive stable values from data or Remotion's seeded random().`,
+          );
+        }
+
+        const strays = findStrayAnimations(state.timeline, preexisting);
+        if (strays.length > 0) {
+          throw new Error(
+            `useGsapTimeline builders created ${strays.join(
+              '; ',
+            )}. Animations that are not children of the provided timeline advance on the wall clock instead of the Remotion frame. Attach them to the timeline, or use a plain zero-duration gsap.set() for static state.`,
+          );
+        }
+
         // Builders only describe motion. Reassert package ownership of playback.
         state.controls.pause();
+
+        // A freshly built timeline is not yet path-independent: zero-duration
+        // tweens exactly at the playhead do not render until passed, and
+        // overlapping same-property tweens lazily record their start values
+        // at whatever frame happens to be visited first — so a direct still
+        // could differ from the same frame reached sequentially (concurrent
+        // render chunks make both orders happen in one video). Prime the
+        // timeline by sweeping the playhead through every child's start time
+        // in playback order, flushing GSAP's lazy value-recording after each
+        // step, so initialization happens exactly as sequential playback
+        // would do it. Runs synchronously inside this layout effect, so no
+        // intermediate state paints. Infinite repeats keep start times
+        // finite, so the sweep stays finite too.
+        const startTimes = [
+          ...new Set(
+            state.timeline
+              .getChildren(true, true, true)
+              .map((child) => child.startTime())
+              .filter((startTime) => Number.isFinite(startTime))
+              .sort((a, b) => a - b),
+          ),
+        ];
+        const totalDuration = state.timeline.totalDuration();
+        const cycleDuration = state.timeline.duration();
+        const primeEnd = Number.isFinite(totalDuration)
+          ? totalDuration
+          : Number.isFinite(cycleDuration)
+            ? cycleDuration
+            : 3600;
+        for (const startTime of [...startTimes, primeEnd]) {
+          state.controls.renderAt(startTime);
+          gsap.ticker.tick();
+        }
         state.controls.renderAt(
           frameToSeconds(frameRef.current, fpsRef.current),
         );
+        gsap.ticker.tick();
       });
 
       controlsRef.current = state.controls;

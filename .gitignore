@@ -6,3 +6,4 @@ coverage/
 *.tgz
 .DS_Store
 .consumer-*/
+evals/

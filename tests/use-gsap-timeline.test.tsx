@@ -373,4 +373,303 @@ describe('useGsapTimeline', () => {
     expect(container.querySelector('[data-error-boundary]')).not.toBeNull();
     consoleError.mockRestore();
   });
+
+  it('rejects plain-object tween targets that would freeze in stills', async () => {
+    const PojoHarness = () => {
+      const scope = useGsapTimeline<HTMLDivElement>(({timeline}) => {
+        const state = {dist: 0, glow: 0.2};
+        timeline.to(state, {dist: 100, duration: 1, ease: 'none'});
+      });
+
+      return <div ref={scope} />;
+    };
+
+    await expect(setFrame(0, <PojoHarness />)).rejects.toThrow(
+      'must target DOM or SVG elements',
+    );
+    await expect(setFrame(0, <PojoHarness />)).rejects.toThrow('plain object {dist, glow}');
+  });
+
+  it('rejects plain-object targets hidden inside nested timelines', async () => {
+    const NestedPojoHarness = () => {
+      const scope = useGsapTimeline<HTMLDivElement>(({timeline, selector}) => {
+        timeline.to(selector('[data-real]'), {opacity: 1, duration: 0.5});
+        const nested = gsap.timeline();
+        nested.to({progress: 0}, {progress: 1, duration: 1});
+        timeline.add(nested, 0.25);
+      });
+
+      return (
+        <div ref={scope}>
+          <div data-real />
+        </div>
+      );
+    };
+
+    await expect(setFrame(0, <NestedPojoHarness />)).rejects.toThrow(
+      'must target DOM or SVG elements',
+    );
+  });
+
+  it('renders a zero-duration set at time 0 on a fresh mount at frame 0', async () => {
+    const SetHarness = () => {
+      const scope = useGsapTimeline<HTMLDivElement>(({timeline, selector}) => {
+        timeline.set(selector('[data-set]'), {backgroundColor: 'rgb(1, 2, 3)'});
+        timeline.fromTo(
+          selector('[data-set]'),
+          {opacity: 0},
+          {opacity: 1, duration: 1, ease: 'none'},
+        );
+      });
+
+      return (
+        <div ref={scope}>
+          <div data-set />
+        </div>
+      );
+    };
+
+    await setFrame(0, <SetHarness />);
+    const element = container.querySelector('[data-set]') as HTMLElement;
+    expect(element.style.backgroundColor).toBe('rgb(1, 2, 3)');
+    expect(opacity(element)).toBe(0);
+  });
+
+  it('renders a mid-timeline set when a fresh mount lands exactly on it', async () => {
+    const MidSetHarness = () => {
+      const scope = useGsapTimeline<HTMLDivElement>(({timeline, selector}) => {
+        timeline.to(selector('[data-mid]'), {opacity: 0.5, duration: 1, ease: 'none'});
+        timeline.set(selector('[data-mid]'), {backgroundColor: 'rgb(4, 5, 6)'}, 1);
+      });
+
+      return (
+        <div ref={scope}>
+          <div data-mid style={{opacity: 1}} />
+        </div>
+      );
+    };
+
+    await setFrame(30, <MidSetHarness />);
+    const element = container.querySelector('[data-mid]') as HTMLElement;
+    expect(element.style.backgroundColor).toBe('rgb(4, 5, 6)');
+  });
+
+  it('primes safely when the timeline contains infinite repeats', async () => {
+    const InfiniteHarness = () => {
+      const scope = useGsapTimeline<HTMLDivElement>(({timeline, selector}) => {
+        timeline.set(selector('[data-inf]'), {backgroundColor: 'rgb(7, 8, 9)'});
+        timeline.to(
+          selector('[data-inf]'),
+          {rotation: 360, duration: 2, ease: 'none', repeat: -1},
+          0,
+        );
+      });
+
+      return (
+        <div ref={scope}>
+          <div data-inf />
+        </div>
+      );
+    };
+
+    await setFrame(15, <InfiniteHarness />);
+    const element = container.querySelector('[data-inf]') as HTMLElement;
+    expect(element.style.backgroundColor).toBe('rgb(7, 8, 9)');
+    expect(element.style.transform).toContain('rotate(90deg)');
+  });
+
+  it('rejects freestanding gsap.to animations that never join the timeline', async () => {
+    const StrayHarness = () => {
+      const scope = useGsapTimeline<HTMLDivElement>(({selector, timeline}) => {
+        timeline.to(selector('[data-stray]'), {opacity: 1, duration: 0.5});
+        gsap.to(selector('[data-stray]'), {x: 500, duration: 1});
+      });
+
+      return (
+        <div ref={scope}>
+          <div data-stray />
+        </div>
+      );
+    };
+
+    await expect(setFrame(0, <StrayHarness />)).rejects.toThrow(
+      'not attached to the provided timeline',
+    );
+  });
+
+  it('rejects gsap.delayedCall scheduled from a builder', async () => {
+    const spy = vi.fn();
+    const DelayedHarness = () => {
+      const scope = useGsapTimeline<HTMLDivElement>(({timeline, selector}) => {
+        timeline.to(selector('[data-delayed]'), {opacity: 1, duration: 0.5});
+        gsap.delayedCall(0.05, spy);
+      });
+
+      return (
+        <div ref={scope}>
+          <div data-delayed />
+        </div>
+      );
+    };
+
+    await expect(setFrame(0, <DelayedHarness />)).rejects.toThrow(
+      'does not allow timeline callbacks',
+    );
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('rejects gsap.ticker callbacks registered from a builder', async () => {
+    const TickerHarness = () => {
+      const scope = useGsapTimeline<HTMLDivElement>(({timeline, selector}) => {
+        timeline.to(selector('[data-tick]'), {opacity: 1, duration: 0.5});
+        gsap.ticker.add(() => undefined);
+      });
+
+      return (
+        <div ref={scope}>
+          <div data-tick />
+        </div>
+      );
+    };
+
+    await expect(setFrame(0, <TickerHarness />)).rejects.toThrow(
+      'must not register gsap.ticker callbacks',
+    );
+  });
+
+  it('allows raw zero-duration gsap.set for static state', async () => {
+    const StaticHarness = () => {
+      const scope = useGsapTimeline<HTMLDivElement>(({timeline, selector}) => {
+        gsap.set(selector('[data-static]'), {backgroundColor: 'rgb(9, 9, 9)'});
+        timeline.fromTo(
+          selector('[data-static]'),
+          {opacity: 0},
+          {opacity: 1, duration: 1, ease: 'none'},
+        );
+      });
+
+      return (
+        <div ref={scope}>
+          <div data-static />
+        </div>
+      );
+    };
+
+    await setFrame(15, <StaticHarness />);
+    const element = container.querySelector('[data-static]') as HTMLElement;
+    expect(element.style.backgroundColor).toBe('rgb(9, 9, 9)');
+    expect(opacity(element)).toBeCloseTo(0.5, 4);
+  });
+
+  it('rejects unseeded random() string values', async () => {
+    const RandomHarness = () => {
+      const scope = useGsapTimeline<HTMLDivElement>(({timeline, selector}) => {
+        timeline.to(selector('[data-random]'), {x: 'random(0, 1000)', duration: 1});
+      });
+
+      return (
+        <div ref={scope}>
+          <div data-random />
+        </div>
+      );
+    };
+
+    await expect(setFrame(0, <RandomHarness />)).rejects.toThrow(
+      'nondeterministic tween configuration',
+    );
+  });
+
+  it('rejects random-order staggers and repeatRefresh', async () => {
+    const StaggerHarness = () => {
+      const scope = useGsapTimeline<HTMLDivElement>(({timeline, selector}) => {
+        timeline.to(selector('[data-item]'), {
+          opacity: 1,
+          duration: 0.5,
+          stagger: {each: 0.1, from: 'random'},
+        });
+      });
+
+      return (
+        <div ref={scope}>
+          <div data-item />
+          <div data-item />
+        </div>
+      );
+    };
+
+    const RefreshHarness = () => {
+      const scope = useGsapTimeline<HTMLDivElement>(({timeline, selector}) => {
+        timeline.to(selector('[data-refresh]'), {
+          x: 100,
+          duration: 0.5,
+          repeat: 2,
+          repeatRefresh: true,
+        });
+      });
+
+      return (
+        <div ref={scope}>
+          <div data-refresh />
+        </div>
+      );
+    };
+
+    await expect(setFrame(0, <StaggerHarness />)).rejects.toThrow(
+      "stagger: {from: 'random'}",
+    );
+    await expect(setFrame(0, <RefreshHarness />)).rejects.toThrow('repeatRefresh: true');
+  });
+
+  it('renders overlapping same-property tweens identically for any frame-visit path', async () => {
+    const OverlapHarness = () => {
+      const scope = useGsapTimeline<HTMLDivElement>(({timeline, selector}) => {
+        timeline.to(selector('[data-overlap]'), {x: 200, duration: 1, ease: 'none'}, 0);
+        timeline.to(selector('[data-overlap]'), {x: 0, duration: 1, ease: 'none'}, 0.5);
+      });
+
+      return (
+        <div ref={scope}>
+          <div data-overlap />
+        </div>
+      );
+    };
+
+    const readX = () =>
+      (container.querySelector('[data-overlap]') as HTMLElement).style.transform;
+
+    await setFrame(23, <OverlapHarness />);
+    const direct = readX();
+
+    await act(async () => root.unmount());
+    root = createRoot(container);
+    remotionClock.frame = 0;
+    await render(<OverlapHarness />);
+    for (let frame = 1; frame <= 23; frame += 1) {
+      await setFrame(frame, <OverlapHarness />);
+    }
+    const sequential = readX();
+
+    expect(direct).toBe(sequential);
+  });
+
+  it('allows SVG element targets through the plain-object guard', async () => {
+    const SvgHarness = () => {
+      const scope = useGsapTimeline<SVGSVGElement>(({timeline, selector}) => {
+        timeline.fromTo(
+          selector('[data-dot]'),
+          {attr: {r: 0}},
+          {attr: {r: 10}, duration: 1, ease: 'none'},
+        );
+      });
+
+      return (
+        <svg ref={scope}>
+          <circle data-dot r={0} />
+        </svg>
+      );
+    };
+
+    await setFrame(15, <SvgHarness />);
+    expect(container.querySelector('[data-dot]')!.getAttribute('r')).toBe('5');
+  });
 });
