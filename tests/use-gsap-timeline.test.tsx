@@ -1,4 +1,4 @@
-import {Component, StrictMode, act, type ReactNode} from 'react';
+import React, {Component, StrictMode, act, type ReactNode} from 'react';
 import {createRoot, type Root} from 'react-dom/client';
 import {gsap} from 'gsap';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
@@ -513,7 +513,7 @@ describe('useGsapTimeline', () => {
     };
 
     await expect(setFrame(0, <DelayedHarness />)).rejects.toThrow(
-      'does not allow timeline callbacks',
+      'wall-clock animation with callbacks',
     );
     expect(spy).not.toHaveBeenCalled();
   });
@@ -650,6 +650,65 @@ describe('useGsapTimeline', () => {
     const sequential = readX();
 
     expect(direct).toBe(sequential);
+  });
+
+  it('keeps guard walks out of GSAP internals and the host React tree', async () => {
+    // Staggers inject vars.parent, whose graph reaches tween targets and,
+    // through React fiber properties on DOM nodes, the entire host app tree.
+    // The surrounding component state deliberately contains prose that the
+    // nondeterminism matcher must never see, mirroring the studio preview
+    // where chat state holds skill documents mentioning random().
+    const HostApp = () => {
+      const [doc] = React.useState(
+        '## Skill: remotion-core — never use unseeded randomness; use seeded random() instead.',
+      );
+      return (
+        <div data-doc={doc.length}>
+          <StaggerHarness />
+        </div>
+      );
+    };
+    const StaggerHarness = () => {
+      const scope = useGsapTimeline<HTMLDivElement>(({timeline, selector}) => {
+        timeline.fromTo(
+          selector('[data-w]'),
+          {opacity: 0, y: 44},
+          {opacity: 1, y: 0, duration: 0.38, ease: 'power3.out', stagger: 0.06},
+          0.05,
+        );
+      });
+      return (
+        <div ref={scope}>
+          <span data-w>a</span>
+          <span data-w>b</span>
+          <span data-w>c</span>
+        </div>
+      );
+    };
+
+    await setFrame(30, <HostApp />);
+    const words = [...container.querySelectorAll('[data-w]')];
+    expect(words).toHaveLength(3);
+    expect(opacity(words[0] as HTMLElement)).toBe(1);
+  });
+
+  it('does not flag prose that merely mentions random()', async () => {
+    const ProseHarness = () => {
+      const scope = useGsapTimeline<HTMLDivElement>(({timeline, selector}) => {
+        timeline.set(selector('[data-prose]'), {'--note': 'we use seeded random() here'});
+        timeline.to(selector('[data-prose]'), {opacity: 0.5, duration: 1});
+      });
+      return (
+        <div ref={scope}>
+          <div data-prose />
+        </div>
+      );
+    };
+
+    await setFrame(15, <ProseHarness />);
+    expect(
+      (container.querySelector('[data-prose]') as HTMLElement).style.getPropertyValue('--note'),
+    ).toBe('we use seeded random() here');
   });
 
   it('allows SVG element targets through the plain-object guard', async () => {

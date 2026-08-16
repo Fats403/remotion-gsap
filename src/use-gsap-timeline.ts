@@ -44,8 +44,21 @@ const getTimelineAnimations = (timeline: gsap.core.Timeline): gsap.core.Animatio
 const animationVars = (animation: gsap.core.Animation): Record<string, unknown> =>
   (animation as gsap.core.Animation & {vars: Record<string, unknown>}).vars;
 
+// Vars walks must stay inside author-written configuration. GSAP injects
+// internals into vars (staggers add a `parent` timeline reference), and from
+// there the object graph reaches tween targets — DOM nodes whose React fiber
+// properties climb into the entire host application's tree. Recursing only
+// into plain objects and arrays keeps the walk on user data: DOM nodes,
+// Animation instances, and fibers all carry custom prototypes.
+const isWalkable = (value: unknown): value is object => {
+  if (typeof value !== 'object' || value === null) return false;
+  if (Array.isArray(value)) return true;
+  const proto = Object.getPrototypeOf(value) as object | null;
+  return proto === Object.prototype || proto === null;
+};
+
 const findCallbacksInValue = (value: unknown, seen = new Set<object>()): string[] => {
-  if (typeof value !== 'object' || value === null || seen.has(value)) {
+  if (!isWalkable(value) || seen.has(value)) {
     return [];
   }
 
@@ -114,11 +127,16 @@ const findNonElementTargets = (timeline: gsap.core.Timeline): string[] => {
 // initialization, so every mount — and every Lambda render chunk — rolls
 // different values. Same for random-order staggers. repeatRefresh re-rolls
 // on every repeat cycle, which also re-records lazily on frame revisits.
+// Matches GSAP's random value tokens — "random(-100, 100)", "+=random(1,5)",
+// "random([a, b, c])" — and not the word "random()" inside prose a
+// composition might legitimately carry.
+const GSAP_RANDOM_TOKEN = /random\(\s*(-?[\d.]|\[)/;
+
 const findNondeterministicVars = (value: unknown, seen = new Set<object>()): string[] => {
   if (typeof value === 'string') {
-    return value.includes('random(') ? [`"${value}"`] : [];
+    return GSAP_RANDOM_TOKEN.test(value) ? [`"${value.slice(0, 120)}"`] : [];
   }
-  if (typeof value !== 'object' || value === null || seen.has(value)) {
+  if (!isWalkable(value) || seen.has(value)) {
     return [];
   }
   seen.add(value);

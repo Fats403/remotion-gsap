@@ -1,6 +1,6 @@
 {
   "name": "remotion-gsap",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "Deterministic, frame-driven GSAP timelines for Remotion",
   "keywords": ["remotion", "gsap", "animation", "video", "react"],
   "license": "MIT",
